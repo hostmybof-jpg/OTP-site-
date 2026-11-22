@@ -317,9 +317,14 @@ def mg_call(endpoint: str, payload: dict) -> dict:
 
 # ─── extract code from a single message dict ───
 def otp_pick_code(m: dict):
+    c = _otp_pick_code(m)
+    return None if (c and re.fullmatch(r'0+', c)) else c
+
+
+def _otp_pick_code(m: dict):
     # prefer the API's own code field (it's already extracted for us)
     c = m.get('code')
-    if c and isinstance(c, str) and re.fullmatch(r'\d{4,8}', c.strip(), re.A):
+    if c and isinstance(c, str) and re.fullmatch(r'\d{4,8}', c.strip(), re.A) and not re.fullmatch(r'0+', c.strip()):
         return c.strip()
 
     # fallback: parse subject + preview/message text
@@ -571,13 +576,14 @@ def bulk_row_html(a: dict) -> str:
     o = ['<div class="bk-row" data-idx="%d" data-status="%s" data-svc="%s" data-sig="%s">'
          % (idx, row_status(a), ' '.join(a.get('svcs') or []), e(row_sig(a)))]
     o.append(
-        '<div class="bk-top"><span class="bk-no" title="Serial">%d</span><div class="bk-mail">%s</div>'
+        '<div class="bk-top"><span class="bk-no" title="Serial">%d</span><div class="bk-mail">%s'
+        '<button type="button" class="mcp bk-ecp" data-code="%s" aria-label="Copy email" title="Copy email">%s</button></div>'
         '<div class="bk-btns">'
         '<button type="button" class="bk-full" data-idx="%d" aria-label="Full latest mail">%s<span>Full mail</span></button>'
         '<button type="button" class="bk-all" data-idx="%d" aria-label="See all messages">%s<span>See all</span></button>'
         '<button type="button" class="bk-ref" data-idx="%d" aria-label="Refresh">%s<span>Refresh</span></button>'
         '</div></div>'
-        % (idx + 1, e(a.get('email') or '(unknown)'), idx, icon('mail'), idx, icon('inbox'), idx, icon('refresh'))
+        % (idx + 1, e(a.get('email') or '(unknown)'), e(a.get('email') or ''), icon('copy'), idx, icon('mail'), idx, icon('inbox'), idx, icon('refresh'))
     )
     o.append('<div class="bk-body">')
     o.append(_bk_body_html(a))
@@ -618,6 +624,8 @@ def _messages_cards_html(messages: list) -> str:
                 '<button type="button" class="mc-cp" data-code="%s" aria-label="Copy" title="Copy code">%s</button></div>'
                 % (e(code), e(code), icon('copy'))
             )
+        else:
+            o.append('<div class="mc-top"><button type="button" class="mc-code mc-vd" data-i="%d">View details</button></div>' % i)
         subj = m.get('subject') or '(no subject)'
         frm = m.get('from')
         frm = 'Unknown' if frm is None or frm == '' else str(frm)
@@ -642,7 +650,11 @@ def _bk_body_html(a: dict) -> str:
         return ('<div class="bk-top2"><div class="bk-code">%s</div>'
                 '<button type="button" class="bk-cp" data-code="%s" aria-label="Copy">%s</button></div>%s%s%s'
                 % (e(a['code']), e(a['code']), icon('copy'), sub, _bk_badge(a), date_line(a.get('date'), 'bk-date', a.get('ts'))))
-    return '<div class="bk-code bk-dim">No code yet</div>' + _bk_badge(a) + date_line(a.get('date'), 'bk-date', a.get('ts'))
+    if a.get('subject'):
+        box = '<button type="button" class="bk-code bk-vd"><span>View details</span></button>'
+    else:
+        box = '<div class="bk-code bk-dim">No mail yet</div>'
+    return box + _bk_badge(a) + date_line(a.get('date'), 'bk-date', a.get('ts'))
 
 
 # ─── HTML for result area (used by AJAX) ───
@@ -681,6 +693,8 @@ def otp_out_html(r: dict) -> str:
                     '<button type="button" class="mc-cp" data-code="%s" aria-label="Copy" title="Copy code">%s</button>'
                     '</div>' % (e(code), e(code), icon('copy'))
                 )
+            else:
+                o.append('<div class="mc-top"><button type="button" class="mc-code mc-vd" data-i="%d">View details</button></div>' % i)
             subj = m.get('subject') or '(no subject)'
             frm = m.get('from')
             frm = 'Unknown' if frm is None or frm == '' else str(frm)
@@ -1161,6 +1175,14 @@ html[data-theme=dark] .bk-prog-txt{color:#c7d2fe}
 html[data-theme=dark] .bk-stop{background:#3a1416;border-color:#6b2226;color:#fca5a5}
 html[data-theme=dark] .ago{color:#8896b3}
 html[data-theme=dark] .ago.fresh{color:#4ade80}
+.mc-code.mc-vd{font-family:inherit;font-size:1.05rem;font-weight:700;letter-spacing:0;text-indent:0;cursor:pointer}
+.bk-code.bk-vd{display:block;width:100%;text-align:center;cursor:pointer;font-family:inherit;font-size:.97rem;font-weight:700;letter-spacing:0}
+.bk-code.bk-vd span{pointer-events:none}
+html[data-theme=dark] .bk-code.bk-vd{background:#1a2248;border:1px dashed #818cf8;color:#c7d2fe}
+.otp-pane.has-out .otp-info{display:none}
+.bk-ecp{display:inline-flex;vertical-align:middle;margin-left:6px;width:26px;height:26px;border-radius:8px;border-color:#dfe5f7;background:#f5f6ff;color:#4f46e5}
+.bk-ecp svg.i{width:14px;height:14px}
+html[data-theme=dark] .bk-ecp{background:#1e2748;border-color:#2e3a63;color:#c7d2fe}
 </style>
 </head>
 <body>
@@ -1250,11 +1272,12 @@ PAGE_JS = r"""
         disableAutoCheck(tab, qs('.tbtn[data-act="auto"]', f));
         setBulkAuto(tab, false);
         stopFlag[tab] = true; lastIn[tab] = ''; delete newSig[tab];
+        f.closest('.otp-pane').classList.remove('has-out');
         qs('.otp-out', f.closest('.otp-pane')).innerHTML = ''; inp.focus(); return;
       }
       // paste from clipboard
-      function got(t){ inp.value = clean(t); syncMail(f); inp.focus(); s.textContent = 'Pasted!'; setTimeout(function(){ s.textContent = orig; }, 1300); }
-      function hint(){ inp.focus(); s.textContent = 'Long-press to paste'; setTimeout(function(){ s.textContent = orig; }, 2200); }
+      function got(t){ inp.value = clean(t); syncMail(f); try{ inp.dispatchEvent(new Event('input')); } catch(x){} inp.focus(); s.textContent = 'Pasted!'; setTimeout(function(){ s.textContent = orig; }, 1300); }
+      function hint(){ openPaste(got); }   // clipboard blocked / not HTTPS -> small paste box
       if (navigator.clipboard && navigator.clipboard.readText && window.isSecureContext)
         navigator.clipboard.readText().then(function(t){ t ? got(t) : hint(); }, hint);
       else hint();
@@ -1329,6 +1352,7 @@ PAGE_JS = r"""
     var total = lines.length, pos = 0, tries = 0, map = {};
     bulkAccounts[tab] = map;
     busy[tab] = true; stopFlag[tab] = false;
+    pane.classList.add('has-out');   // hide the Instructions box while results are shown
     btn.disabled = true; btn.classList.add('load');
     lab.textContent = btn.dataset.busy || 'Reading…';
     askNotif(); audioCtx();
@@ -1528,8 +1552,8 @@ PAGE_JS = r"""
 
   /* "Full mail" on a bulk row: open the latest email of that account directly */
   wrap.addEventListener('click', function(e){
-    var b = e.target.closest('.bk-full'); if (!b) return;
-    var pane = b.closest('.otp-pane'), tab = pane.dataset.pane, idx = parseInt(b.dataset.idx, 10);
+    var b = e.target.closest('.bk-full, .bk-vd'); if (!b) return;
+    var pane = b.closest('.otp-pane'), tab = pane.dataset.pane, idx = parseInt(b.dataset.idx || b.closest('.bk-row').dataset.idx, 10);
     var line = (bulkAccounts[tab] || {})[idx]; if (!line) return;
     var lab = qs('span', b), orig = lab.textContent;
     b.disabled = true; lab.textContent = 'Loading\u2026';
@@ -1623,7 +1647,7 @@ PAGE_JS = r"""
   }
 
   wrap.addEventListener('click', function(e){
-    var b = e.target.closest('.mc-full'); if (!b) return;
+    var b = e.target.closest('.mc-full, .mc-vd'); if (!b) return;
     var i = parseInt(b.dataset.i, 10);
     var bkRow = b.closest('.bk-row');
     var m = bkRow
@@ -1748,6 +1772,7 @@ PAGE_JS = r"""
       f.elements.data.value = d.v || '';
       syncMail(f);
       qs('.otp-out', p).innerHTML = d.h || '';
+      if (qs('.bk-row', p)) p.classList.add('has-out');
     });
     mails = st.mails || {};
     bulkAccounts = st.bulk || {};
@@ -1866,14 +1891,14 @@ PAGE_JS = r"""
   /* single-account tabs: signature of the newest mail's code */
   function firstSig(out){
     var mc = qs('.mc', out); if (!mc) return '';
-    var c = qs('.mc-code', mc);
+    var c = qs('.mc-code:not(.mc-vd)', mc);
     return c ? c.textContent + '|' + (mc.getAttribute('data-ts') || '') : '';
   }
   function trackNew(tab, out, val, prevHad, prevSig){
     var ns = firstSig(out), mc = qs('.mc', out);
     if (prevHad && ns && ns !== prevSig && isFresh(mc.getAttribute('data-ts'))){
       newSig[tab] = ns;
-      notifyNew((val.split(/\r?\n/)[0] || '').split('|')[0], qs('.mc-code', mc).textContent);
+      notifyNew((val.split(/\r?\n/)[0] || '').split('|')[0], qs('.mc-code:not(.mc-vd)', mc).textContent);
     }
     lastIn[tab] = val;
     if (ns && newSig[tab] === ns && !qs('.new-badge', mc)){
@@ -1910,6 +1935,30 @@ PAGE_JS = r"""
     stopFlag[s_.closest('.otp-pane').dataset.pane] = true;
     s_.disabled = true; s_.textContent = 'Stopping…';
   });
+
+  /* ── paste box: fallback when the browser blocks direct clipboard reading ── */
+  var pasteCb = null;
+  function closePaste(){ var b = document.getElementById('pasteBox'); if (b) b.hidden = true; pasteCb = null; }
+  function openPaste(cb){
+    var b = document.getElementById('pasteBox'); if (!b) return;
+    var ta = document.getElementById('pasteTa'); ta.value = ''; pasteCb = cb; b.hidden = false;
+    setTimeout(function(){ try{ ta.focus(); } catch(e){} }, 60);
+  }
+  function applyPaste(){
+    var ta = document.getElementById('pasteTa'), v = ta.value, cb = pasteCb;
+    if (!v.trim()) return;
+    closePaste(); if (cb) cb(v);
+  }
+  (function(){
+    var b = document.getElementById('pasteBox'); if (!b) return;
+    var ta = document.getElementById('pasteTa');
+    ta.addEventListener('paste', function(){ setTimeout(applyPaste, 0); });
+    b.addEventListener('click', function(e){
+      var x = e.target.closest('[data-pm]'); if (!x) return;
+      if (x.dataset.pm === 'ok') applyPaste(); else closePaste();
+    });
+    document.addEventListener('keydown', function(e){ if (e.key === 'Escape' && !b.hidden) closePaste(); });
+  })();
 
   /* ── dark / light toggle ── */
   (function(){
@@ -2113,6 +2162,22 @@ QR_MODAL = (
 )
 
 
+PASTE_MODAL = (
+    '<div class="qr" id="pasteBox" hidden>\n'
+    '  <div class="qr-bd" data-pm="close"></div>\n'
+    '  <div class="qr-sh" role="dialog" aria-modal="true" aria-label="Paste">\n'
+    '    <div class="qr-h"><b>Paste your data</b></div>\n'
+    '    <textarea class="otp-input" id="pasteTa" rows="5" spellcheck="false" placeholder="Tap and hold here, then choose Paste (or press Ctrl+V)"></textarea>\n'
+    '    <p class="qr-msg">It is filled in automatically as soon as you paste.</p>\n'
+    '    <div class="qr-btns">\n'
+    '      <button type="button" class="tbtn" data-pm="ok">Use text</button>\n'
+    '      <button type="button" class="tbtn" data-pm="close">Cancel</button>\n'
+    '    </div>\n'
+    '  </div>\n'
+    '</div>\n'
+)
+
+
 def render_page(tab: str, csrf: str) -> str:
     o = [PAGE_HEAD]
     o.append('\n<div class="otp-wrap" id="otpWrap" data-csrf="%s">\n' % e(csrf))
@@ -2218,6 +2283,7 @@ def render_page(tab: str, csrf: str) -> str:
 
     o.append('\n</div><!-- /otp-wrap -->\n')
     o.append(QR_MODAL % icon('x'))
+    o.append(PASTE_MODAL)
     o.append('<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>\n')
     o.append('\n<script>')
     o.append(PAGE_JS.replace('__SVC_JSON__', json.dumps({k: list(v) for k, v in SERVICE_MAP.items()}).replace('</', '<\\/')))
